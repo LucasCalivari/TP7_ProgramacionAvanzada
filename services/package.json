@@ -1,0 +1,10 @@
+{
+  "name": "rutasur-services",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "kafkajs": "^2.2.4",
+    "mongodb": "^6.8.0"
+  }
+}

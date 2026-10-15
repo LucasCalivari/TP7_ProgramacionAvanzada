@@ -1,0 +1,102 @@
+x-servicio: &servicio
+  build: ./services
+  restart: unless-stopped
+  environment: &env
+    KAFKA_BROKERS: kafka:9092
+    MONGO_URL: mongodb://mongo:27017/?replicaSet=rs0
+    FACTOR: "120"            # 1 hora simulada = 30 s
+    ENVIOS_POR_MINUTO: "20"
+    SEED: "42"
+  depends_on:
+    init:
+      condition: service_completed_successfully
+
+services:
+  kafka:
+    image: apache/kafka:3.8.0
+    ports: ["29092:29092"]
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+    volumes: [kafka-data:/var/lib/kafka/data]
+
+  mongo:
+    image: mongo:7
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports: ["27017:27017"]
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"try{rs.status()}catch(e){rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo:27017'}]})}; quit(db.hello().isWritablePrimary?0:1)\""]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+    volumes: [mongo-data:/data/db]
+
+  init:
+    build: ./services
+    command: ["node", "src/init.js"]
+    environment: *env
+    depends_on:
+      kafka: { condition: service_healthy }
+      mongo: { condition: service_healthy }
+
+  simulador:
+    <<: *servicio
+    command: ["node", "src/simulador.js"]
+    ports: ["4000:4000"]
+
+  proyector:
+    <<: *servicio
+    command: ["node", "src/proyector.js"]
+
+  notificaciones:
+    <<: *servicio
+    command: ["node", "src/notificaciones.js"]
+
+  reprogramacion:
+    <<: *servicio
+    command: ["node", "src/reprogramacion.js"]
+
+  monitor-sla:
+    <<: *servicio
+    command: ["node", "src/monitor-sla.js"]
+
+  analitica:
+    <<: *servicio
+    command: ["node", "src/analitica.js"]
+
+  # Cuarto indicador (reprocesamiento): se activa a pedido con
+  #   docker compose --profile reproceso up -d analitica-tiempos
+  analitica-tiempos:
+    <<: *servicio
+    command: ["node", "src/analitica-tiempos.js"]
+    profiles: [reproceso]
+
+  web:
+    build: ./web
+    ports: ["3000:3000"]
+    environment:
+      MONGO_URL: mongodb://mongo:27017/?replicaSet=rs0
+      SIMULADOR_URL: http://simulador:4000
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
+volumes:
+  kafka-data:
+  mongo-data:
